@@ -1,0 +1,4 @@
+scrapling[fetchers]>=0.5.1
+# Only needed for saving .xlsx from the command line:
+pandas
+openpyxl

@@ -1,0 +1,13 @@
+# Personal data, created when you run the tools
+skroutz_prices.db
+skroutz_prices.db-journal
+# PassMark benchmark data is theirs; each user downloads their own copy
+passmark_cache.json
+# Exports
+*.csv
+*.xlsx
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
