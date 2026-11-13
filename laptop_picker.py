@@ -16,6 +16,7 @@ Uses skroutz_scraper.py for crawling, price history and photos.
 """
 import json
 import math
+import os
 import re
 import time
 import webbrowser
@@ -27,11 +28,11 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 from scrapling.fetchers import FetcherSession
 
-from skroutz_scraper import BASE, crawl_listing, fill_photos, open_db, record_and_annotate, thumb
+from skroutz_scraper import BASE, crawl_listing, data_dir, fill_photos, open_db, record_and_annotate, thumb
 
-PORT = 8766
+PORT = int(os.environ.get("LAPTOP_PICKER_PORT", 8766))
 LAPTOPS_URL = f"{BASE}/c/25/laptop.html"
-BENCH_FILE = Path(__file__).with_name("passmark_cache.json")
+BENCH_FILE = data_dir() / "passmark_cache.json"
 BENCH_MAX_AGE_DAYS = 30
 DELAY = 2.0
 

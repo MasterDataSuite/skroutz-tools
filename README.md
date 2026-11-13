@@ -7,7 +7,15 @@ Two small local web apps for finding good buys on [Skroutz.gr](https://www.skrou
 
 Everything runs on your own PC. The pages are only reachable from your machine.
 
-## Quick start
+## Download (Windows, no Python needed)
+
+1. Go to the **[latest release](https://github.com/MasterDataSuite/skroutz-tools/releases/latest)** and download `SkroutzTools.exe`.
+2. Double-click it. A console window opens (it shows progress, and closing it stops the app), and your browser opens the Deal Finder.
+3. Windows may say **"Windows protected your PC"**, because the app isn't code-signed. Click **More info → Run anyway**.
+
+Your price history and benchmark data are kept in `%APPDATA%\SkroutzTools`, so they survive updates. To update, download the new `.exe` and replace the old one.
+
+## Run from source
 
 Requires **Python 3.10+**.
 
@@ -52,5 +60,15 @@ Run `python skroutz_scraper.py --help` for all options.
 - **robots.txt:** they only visit pages Skroutz's robots.txt allows (listings and product pages).
 - **Personal use only:** check the sites' terms before running anything at scale.
 - **PassMark data:** it is © PassMark Software and is not included in this repository. Each user downloads it for their own personal use.
+
+## Building the .exe
+
+Build in a clean virtual environment, so unrelated packages don't get bundled:
+```bash
+python -m venv .venv
+.venv\Scripts\pip install "scrapling[fetchers]>=0.5.1" pyinstaller
+.venv\Scripts\python -m PyInstaller --onefile --name SkroutzTools --exclude-module playwright --exclude-module tkinter --collect-data apify_fingerprint_datapoints --collect-data browserforge --collect-data scrapling app.py
+```
+The result is `dist\SkroutzTools.exe`, about 22 MB. Ports can be changed with the `DEAL_FINDER_PORT` and `LAPTOP_PICKER_PORT` environment variables.
 
 Scrapers break when sites change their HTML. If results suddenly come back empty, the CSS selectors in `skroutz_scraper.py` probably need updating.

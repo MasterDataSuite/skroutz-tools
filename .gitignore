@@ -6,6 +6,10 @@ passmark_cache.json
 # Exports
 *.csv
 *.xlsx
+# Build output
+build/
+dist/
+*.spec
 # Python
 __pycache__/
 *.pyc

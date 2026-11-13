@@ -14,8 +14,10 @@ Every run saves prices to skroutz_prices.db, so each product gets compared with 
 import argparse
 import csv
 import json
+import os
 import re
 import sqlite3
+import sys
 import time
 from contextlib import closing
 from datetime import date
@@ -26,7 +28,21 @@ from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse, quo
 from scrapling.fetchers import FetcherSession
 
 BASE = "https://www.skroutz.gr"
-DB_PATH = Path(__file__).with_name("skroutz_prices.db")
+
+# Windows consoles can't show every character (e.g. Skroutz's non-breaking hyphen); a progress print must never crash a scrape
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
+def data_dir():
+    """Next to the scripts; for the .exe, %APPDATA%/SkroutzTools (the .exe's own folder is wiped after each run)."""
+    if getattr(sys, "frozen", False):
+        folder = Path(os.environ.get("APPDATA") or Path.home()) / "SkroutzTools"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+    return Path(__file__).parent
+
+
+DB_PATH = data_dir() / "skroutz_prices.db"
 HISTORY_COLS = ["Verdict", "vs Usual %", "Usual Price", "Lowest Before", "Days Tracked"]
 
 

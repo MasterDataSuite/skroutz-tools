@@ -5,6 +5,7 @@ Run:  python app.py   (or double-click Start.bat on Windows)
   Laptop Picker -> http://127.0.0.1:8766
 Both are only reachable from this PC. Ctrl+C (or closing the window) stops them.
 """
+import os
 import threading
 import webbrowser
 from http.server import ThreadingHTTPServer
@@ -25,7 +26,8 @@ if __name__ == "__main__":
     print(f"Deal Finder   -> http://127.0.0.1:{skroutz_web.PORT}")
     print(f"Laptop Picker -> http://127.0.0.1:{laptop_picker.PORT}")
     print("Ctrl+C or close this window to stop.")
-    webbrowser.open(f"http://127.0.0.1:{skroutz_web.PORT}")
+    if not os.environ.get("NO_BROWSER"):
+        webbrowser.open(f"http://127.0.0.1:{skroutz_web.PORT}")
     try:
         servers[0].serve_forever()
     except KeyboardInterrupt:

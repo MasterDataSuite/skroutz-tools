@@ -4,6 +4,7 @@ Run:  python skroutz_web.py   -> opens http://127.0.0.1:8765 in your browser.
 Only reachable from this PC. Scraping logic lives in skroutz_scraper.py.
 """
 import json
+import os
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
@@ -12,7 +13,7 @@ from scrapling.fetchers import Fetcher, FetcherSession
 
 from skroutz_scraper import BASE, add_details, crawl_listing, fill_photos, rank, record_and_annotate, with_params
 
-PORT = 8765
+PORT = int(os.environ.get("DEAL_FINDER_PORT", 8765))
 
 PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
