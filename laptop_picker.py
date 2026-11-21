@@ -26,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from skroutz_scraper import BASE, crawl_listing, data_dir, fill_photos, open_db, open_session, record_and_annotate, thumb
+from skroutz_scraper import BASE, crawl_listing, data_dir, fill_history, fill_photos, open_db, open_session, record_and_annotate, thumb
 
 PORT = int(os.environ.get("LAPTOP_PICKER_PORT", 8766))
 LAPTOPS_URL = f"{BASE}/c/25/laptop.html"
@@ -339,6 +339,8 @@ def pick(q):
             score_row(r, cache.get(r["SKU"]), cpus, gpus)
         top = sorted(rows, key=lambda r: -overall(r, profile))[:lookups]
         fill_photos(session, top, DELAY)
+        fill_history(session, top, DELAY)
+        record_and_annotate(top)  # again, now with Skroutz's 3-month history
     return {"rows": rows, "profiles": PROFILES, "benchFetched": bench["fetched"]}
 
 
@@ -432,7 +434,7 @@ function partCell(name, score, tip) {
   const td = el("td", "part"); td.append(scoreCell(score)); td.append(el("div", "muted", name || "unknown"));
   if (tip) td.title = tip; return td;
 }
-const VERDICT = {"All-time low": "good", "Below usual": "good", "Fake discount?": "bad", "Above usual": "bad"};
+const VERDICT = {"3-month low": "good", "Below average": "good", "Fake discount?": "bad", "Above average": "bad"};
 
 const COLS = [
   {h: "#", sort: null, cell: (r, i) => el("td", "num", i + 1)},

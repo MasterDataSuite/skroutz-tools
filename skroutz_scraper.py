@@ -20,9 +20,9 @@ import sqlite3
 import sys
 import time
 from contextlib import closing
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from statistics import median
+from statistics import mean
 from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse, quote_plus
 
 import random
@@ -40,6 +40,11 @@ USER_AGENTS = [
 ]
 
 
+FETCH_JSON_JS = """const done = arguments[arguments.length - 1];
+fetch(arguments[0], {headers: {"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"}})
+  .then(r => r.text().then(t => done([r.status, t]))).catch(e => done([0, String(e)]));"""
+
+
 class BrowserSession:
     """Headless Firefox via Selenium, same .get(url) -> page interface as FetcherSession.
     Each request gets a fresh browser with a random user agent and, if SKROUTZ_PROXIES is set
@@ -53,7 +58,7 @@ class BrowserSession:
     def __exit__(self, *exc):
         return False
 
-    def get(self, url):
+    def _driver(self, javascript=False):
         from selenium import webdriver
         from selenium.webdriver.firefox.options import Options
         from selenium.webdriver.firefox.service import Service
@@ -62,7 +67,7 @@ class BrowserSession:
         options.add_argument("--headless")
         options.set_preference("permissions.default.image", 2)
         options.set_preference("permissions.default.stylesheet", 2)
-        options.set_preference("javascript.enabled", False)
+        options.set_preference("javascript.enabled", javascript)
         options.set_preference("general.useragent.override", random.choice(USER_AGENTS))
         proxies = [p.strip() for p in os.environ.get("SKROUTZ_PROXIES", "").split(",") if p.strip()]
         if proxies:
@@ -77,14 +82,37 @@ class BrowserSession:
             options.binary_location = binary
         # ponytail: a new Firefox per request (~2 s) for a fresh identity each time; reuse one driver if speed matters more
         driver = webdriver.Firefox(service=Service(os.environ.get("GECKODRIVER")), options=options)
+        driver.set_page_load_timeout(30)
+        driver.set_script_timeout(30)
+        return driver
+
+    def get(self, url):
+        driver = self._driver()
         try:
-            driver.set_page_load_timeout(30)
             driver.get(url)
             page = Selector(driver.page_source, url=driver.current_url)
         finally:
             driver.quit()
         page.status = 200  # Selenium can't see HTTP status; a block page simply has no product cards
         return page
+
+    def price_graph(self, url):
+        """A product's price-history JSON. Skroutz only answers it from inside the product page with
+        JavaScript on, so this opens the page and asks from there. Raises PermissionError when refused."""
+        from selenium.webdriver.common.by import By
+
+        driver = self._driver(javascript=True)
+        try:
+            driver.get(url)
+            path = driver.find_element(By.CSS_SELECTOR, f"[{CHART_ATTR}]").get_attribute(CHART_ATTR)
+            status, text = driver.execute_async_script(FETCH_JSON_JS, path)
+        finally:
+            driver.quit()
+        if status in (403, 429):
+            raise PermissionError(f"HTTP {status}")
+        if status != 200:
+            raise RuntimeError(f"HTTP {status}")
+        return json.loads(text)
 
 
 def open_session(fetcher=None):
@@ -113,29 +141,31 @@ def data_dir():
 
 
 DB_PATH = data_dir() / "skroutz_prices.db"
-HISTORY_COLS = ["Verdict", "vs Usual %", "Usual Price", "Lowest Before", "Days Tracked"]
+HISTORY_COLS = ["Verdict", "vs Avg %", "3-Month Avg", "3-Month Low", "Days Tracked"]
+HISTORY_DAYS = 90  # verdicts compare with the last 3 months
+CHART_ATTR = "data-sku-page--price-history-chart-url-value"  # product page -> its price-history JSON URL
 
 
 def history_verdict(price, old_price, past):
-    """Compare today's price with the prices recorded on earlier days (one per day)."""
+    """Compare today's price with the prices recorded on earlier days of the last 3 months (one per day)."""
     if not past:
-        return {"Verdict": "New", "vs Usual %": None, "Usual Price": None, "Lowest Before": None, "Days Tracked": 1}
-    usual, low = median(past), min(past)
+        return {"Verdict": "New", "vs Avg %": None, "3-Month Avg": None, "3-Month Low": None, "Days Tracked": 1}
+    avg, low = mean(past), min(past)
     if price < low:
-        verdict = "All-time low"
-    elif price < usual * 0.95:
-        verdict = "Below usual"
+        verdict = "3-month low"
+    elif price < avg * 0.95:
+        verdict = "Below average"
     elif old_price and len(past) >= 3 and old_price > max(past) * 1.02:
-        verdict = "Fake discount?"  # "old price" higher than anything we've actually seen it sell for
-    elif price > usual * 1.05:
-        verdict = "Above usual"
+        verdict = "Fake discount?"  # "old price" higher than anything it actually sold for in 3 months
+    elif price > avg * 1.05:
+        verdict = "Above average"
     else:
         verdict = "Normal"
     return {
         "Verdict": verdict,
-        "vs Usual %": round((price - usual) / usual * 100, 1),
-        "Usual Price": round(usual, 2),
-        "Lowest Before": low,
+        "vs Avg %": round((price - avg) / avg * 100, 1),
+        "3-Month Avg": round(avg, 2),
+        "3-Month Low": low,
         "Days Tracked": len(past) + 1,
     }
 
@@ -145,6 +175,7 @@ def open_db(db_path=DB_PATH):
     db.execute("""CREATE TABLE IF NOT EXISTS prices (
         sku TEXT, day TEXT, price REAL, old_price REAL, title TEXT, PRIMARY KEY (sku, day))""")
     db.execute("CREATE TABLE IF NOT EXISTS photos (sku TEXT PRIMARY KEY, url TEXT)")
+    db.execute("CREATE TABLE IF NOT EXISTS history_fetched (sku TEXT PRIMARY KEY, day TEXT)")
     return closing(db)
 
 
@@ -158,7 +189,9 @@ def record_and_annotate(rows, db_path=DB_PATH, today=None):
         db.executemany("INSERT OR REPLACE INTO photos VALUES (?, ?)", [(r["SKU"], r["Photo"]) for r in rows if r.get("Photo")])
         db.commit()
         for r in rows:
-            past = [p for (p,) in db.execute("SELECT price FROM prices WHERE sku = ? AND day < ?", (r["SKU"], today))]
+            since = (date.fromisoformat(today) - timedelta(days=HISTORY_DAYS)).isoformat()
+            past = [p for (p,) in db.execute("SELECT price FROM prices WHERE sku = ? AND day < ? AND day >= ?",
+                                             (r["SKU"], today, since))]
             r.update(history_verdict(r["Price"], r["Old Price"], past))
             if not r.get("Photo"):
                 saved = db.execute("SELECT url FROM photos WHERE sku = ?", (r["SKU"],)).fetchone()
@@ -182,6 +215,49 @@ def fill_photos(session, rows, delay, limit=40, db_path=DB_PATH):
             if r["Photo"]:
                 db.execute("INSERT OR REPLACE INTO photos VALUES (?, ?)", (r["SKU"], r["Photo"]))
                 db.commit()
+
+
+def history_points(graph, today):
+    """Skroutz price-graph JSON -> {day: lowest price} for the last 3 months, before today."""
+    since = (date.fromisoformat(today) - timedelta(days=HISTORY_DAYS)).isoformat()
+    points = {}
+    for series in graph.get("min_price", {}).get("graphData", {}).values():  # "1_months", "3_months", ...
+        for v in series.get("values", []):
+            # Timestamps are midnight Greek time; +12 h lands mid-day, so the UTC date is the Greek date
+            day = datetime.fromtimestamp(v["timestamp"] + 43200, timezone.utc).date().isoformat()
+            if since <= day < today and v.get("value"):
+                points.setdefault(day, v["value"])
+    return points
+
+
+def fill_history(session, rows, delay, limit=40, db_path=DB_PATH, today=None):
+    """Load Skroutz's own daily lowest-price history (last 3 months) into the price database,
+    so verdicts work from the first run. Remembered for a week per product. Browser fetcher only."""
+    if not hasattr(session, "price_graph"):
+        return
+    today = today or date.today().isoformat()
+    week_ago = (date.fromisoformat(today) - timedelta(days=7)).isoformat()
+    with open_db(db_path) as db:
+        fresh = {sku for (sku,) in db.execute("SELECT sku FROM history_fetched WHERE day > ?", (week_ago,))}
+        todo = [r for r in rows if r["SKU"] not in fresh][:limit]
+        if todo:
+            print(f"Fetching 3-month price history for {len(todo)} products from Skroutz (then remembered for a week)...")
+        for i, r in enumerate(todo, 1):
+            time.sleep(delay)
+            try:
+                points = history_points(session.price_graph(r["URL"]), today)
+            except PermissionError:  # Skroutz/Cloudflare is limiting these requests: back off for this run
+                print("  Skroutz is refusing price-history requests right now; the rest use your own history. Try again later.")
+                break
+            except Exception as e:  # no history shouldn't kill the run
+                print(f"  history failed for {r['URL']}: {e}")
+                continue
+            # Our own daily records win over Skroutz's for the same day
+            db.executemany("INSERT OR IGNORE INTO prices VALUES (?, ?, ?, NULL, ?)",
+                           [(r["SKU"], day, price, r["Title"]) for day, price in points.items()])
+            db.execute("INSERT OR REPLACE INTO history_fetched VALUES (?, ?)", (r["SKU"], today))
+            db.commit()
+            print(f"  history {i}/{len(todo)}: {len(points)} days, {r['Title'][:50]}")
 
 
 def thumb(url):
@@ -303,7 +379,7 @@ def rank(rows, sort, top, min_discount=0):
         rows = [r for r in rows if r["Discount %"] >= min_discount]
     keys = {
         "discount": lambda r: (-r["Discount %"], r["Price"]),
-        "history": lambda r: (r.get("vs Usual %") is None, r.get("vs Usual %") or 0),  # furthest below usual first
+        "history": lambda r: (r.get("vs Avg %") is None, r.get("vs Avg %") or 0),  # furthest below its 3-month average first
         "reviews": lambda r: (-r["Reviews"], -(r["Rating"] or 0), r["Price"]),  # most reviewed, best, cheapest
         "price": lambda r: r["Price"],
         "rating": lambda r: (-(r["Rating"] or 0), -r["Reviews"], r["Price"]),
@@ -338,7 +414,7 @@ def main():
     ap.add_argument("--pages", type=int, default=10, help="Max listing pages (default 10)")
     ap.add_argument("--sort", choices=["none", "price", "reviews", "rating", "discount", "history"], default="none",
                     help="reviews = most reviews, then best rating, then cheapest; discount = biggest %% off; "
-                         "history = furthest below its own usual price")
+                         "history = furthest below its 3-month average")
     ap.add_argument("--min-discount", type=float, default=0, help="Keep only items at least this %% off the old price")
     ap.add_argument("--only-discounted", action="store_true", help="Keep only items that show a discount")
     ap.add_argument("--top", type=int, help="Keep only the first N after sorting")
@@ -361,6 +437,8 @@ def main():
             record_and_annotate(rows)
             min_discount = max(args.min_discount, 0.1 if args.only_discounted else 0)
             rows = rank(rows, args.sort, args.top, min_discount)
+            fill_history(session, rows, args.delay)
+            record_and_annotate(rows)
             if args.details:
                 add_details(session, rows, args.delay)
     except KeyboardInterrupt:
@@ -372,9 +450,13 @@ def main():
 if __name__ == "__main__":
     assert parse_price("3.448,89 €") == 3448.89 and parse_price("0,27 €") == 0.27 and parse_price("899 €") == 899
     assert parse_price(None) is None
-    assert history_verdict(80, None, [100, 100, 95])["Verdict"] == "All-time low"
+    assert history_verdict(80, None, [100, 100, 95])["Verdict"] == "3-month low"
     assert history_verdict(100, 150, [100, 101, 99])["Verdict"] == "Fake discount?"
     assert history_verdict(100, None, [])["Verdict"] == "New"
+    assert history_verdict(100, None, [90, 120])["3-Month Avg"] == 105  # average, not median
+    g = {"min_price": {"graphData": {"1_months": {"values": [{"timestamp": 1792616400, "value": 28.35}, {"timestamp": 1792702800, "value": 29}]},
+                                     "3_months": {"values": [{"timestamp": 1788210000, "value": 31}, {"timestamp": 1779400000, "value": 99}]}}}}
+    assert history_points(g, "2026-11-21") == {"2026-10-22": 28.35, "2026-10-23": 29, "2026-09-01": 31}, history_points(g, "2026-11-21")  # 99 is >90 days old
     assert thumb("https://a.scdn.gr/images/sku_main_images/1/2/xlarge_20220913153729_x.jpeg").endswith("/medium_20220913153729_x.jpeg")
     assert thumb("https://a.scdn.gr/images/sku_main_images/1/2/20220913153729_x.jpeg").endswith("/medium_20220913153729_x.jpeg")
     main()

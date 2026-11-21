@@ -9,7 +9,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 
-from skroutz_scraper import BASE, add_details, crawl_listing, fill_photos, open_session, rank, record_and_annotate, with_params
+from skroutz_scraper import BASE, add_details, crawl_listing, fill_history, fill_photos, open_session, rank, record_and_annotate, with_params
 
 PORT = int(os.environ.get("DEAL_FINDER_PORT", 8765))
 
@@ -61,7 +61,7 @@ td.photo img{width:64px;height:64px;object-fit:contain;background:#fff;border-ra
   <label>Max pages <input name="pages" type="number" min="1" max="50" value="3"></label>
   <label>Sort <select name="sort">
     <option value="discount">Biggest discount</option>
-    <option value="history">Best vs its usual price</option>
+    <option value="history">Best vs its 3-month average</option>
     <option value="none">Site order</option><option value="price">Cheapest first</option>
     <option value="reviews">Most reviews → rating → price</option><option value="rating">Best rating</option></select></label>
   <label>Min % off <input name="min_discount" type="number" min="0" max="99" placeholder="e.g. 30"></label>
@@ -76,12 +76,12 @@ td.photo img{width:64px;height:64px;object-fit:contain;background:#fff;border-ra
 </main><script>
 let rows = [], cols = [], sortKey = null, asc = true, scrapeInfo = "";
 const $ = id => document.getElementById(id);
-const NUM = new Set(["Price", "Old Price", "Discount %", "vs Usual %", "Usual Price", "Lowest Before", "Days Tracked", "Rating", "Reviews"]);
-const EURO = new Set(["Price", "Old Price", "Usual Price", "Lowest Before"]);
+const NUM = new Set(["Price", "Old Price", "Discount %", "vs Avg %", "3-Month Avg", "3-Month Low", "Days Tracked", "Rating", "Reviews"]);
+const EURO = new Set(["Price", "Old Price", "3-Month Avg", "3-Month Low"]);
 const fmt = (k, v) => v == null ? "" : EURO.has(k) ? v.toFixed(2).replace(".", ",") + " €"
   : k === "Discount %" ? (v ? "-" + v + "%" : "")
-  : k === "vs Usual %" ? (v > 0 ? "+" : "") + v + "%" : String(v);
-const VERDICT = {"All-time low": "good", "Below usual": "good", "Fake discount?": "bad", "Above usual": "bad"};
+  : k === "vs Avg %" ? (v > 0 ? "+" : "") + v + "%" : String(v);
+const VERDICT = {"3-month low": "good", "Below average": "good", "Fake discount?": "bad", "Above average": "bad"};
 
 $("f").onsubmit = async e => {
   e.preventDefault();
@@ -94,7 +94,7 @@ $("f").onsubmit = async e => {
     const data = await r.json();
     if (!r.ok) throw new Error(data.error);
     rows = data.rows; sortKey = null;
-    const first = ["Brand","Title","Photo","Category","Price","Old Price","Discount %","Verdict","vs Usual %","Usual Price","Lowest Before","Days Tracked","Rating","Reviews","Specs","Sponsored","SKU","URL"];
+    const first = ["Brand","Title","Photo","Category","Price","Old Price","Discount %","Verdict","vs Avg %","3-Month Avg","3-Month Low","Days Tracked","Rating","Reviews","Specs","Sponsored","SKU","URL"];
     cols = [...new Set(rows.flatMap(Object.keys))].sort((a, b) => (first.indexOf(a)+1 || 99) - (first.indexOf(b)+1 || 99));
     scrapeInfo = `${rows.length} products scraped in ${Math.round((Date.now()-t0)/1000)}s`
       + (rows.length && rows.every(r => r.Verdict === "New") ? " · First time seeing these: price history builds up each day you run it." : "");
@@ -204,6 +204,8 @@ def scrape(q):
         shown = [r for r in rows if r["Discount %"] > 0] if q.get("only_discounted") else rows
         shown = shown[:top] if top else shown
         fill_photos(session, shown, 1.5)
+        fill_history(session, shown, 1.5)
+        record_and_annotate(shown)  # again, now with Skroutz's 3-month history
         if q.get("details"):
             add_details(session, shown, 2.0)
     return rows
