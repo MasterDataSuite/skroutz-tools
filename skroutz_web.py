@@ -9,9 +9,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 
-from scrapling.fetchers import Fetcher, FetcherSession
-
-from skroutz_scraper import BASE, add_details, crawl_listing, fill_photos, rank, record_and_annotate, with_params
+from skroutz_scraper import BASE, add_details, crawl_listing, fill_photos, open_session, rank, record_and_annotate, with_params
 
 PORT = int(os.environ.get("DEAL_FINDER_PORT", 8765))
 
@@ -170,7 +168,8 @@ _categories = []
 def categories():
     """Deals categories, read once from the deals page's own links."""
     if not _categories:
-        page = Fetcher.get(f"{BASE}/deals/c/1269/technology", impersonate="chrome")
+        with open_session() as session:
+            page = session.get(f"{BASE}/deals/c/1269/technology")
         seen = set()
         for a in page.css("a[href*='/deals/c/']"):
             url = urljoin(BASE, a.attrib.get("href", "").split("?")[0])
@@ -197,7 +196,7 @@ def scrape(q):
     top = int(q["top"]) if q.get("top") else None
 
     rows = []
-    with FetcherSession(impersonate="chrome", retries=3) as session:
+    with open_session() as session:
         crawl_listing(session, url, pages, 2.0, rows)
         record_and_annotate(rows)
         rows = rank(rows, sort, None, float(q.get("min_discount") or 0))  # all rows; the page trims to top N live

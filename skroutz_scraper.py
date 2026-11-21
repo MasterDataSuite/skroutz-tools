@@ -25,9 +25,79 @@ from pathlib import Path
 from statistics import median
 from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse, quote_plus
 
+import random
+
 from scrapling.fetchers import FetcherSession
+from scrapling.parser import Selector
 
 BASE = "https://www.skroutz.gr"
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15",
+]
+
+
+class BrowserSession:
+    """Headless Firefox via Selenium, same .get(url) -> page interface as FetcherSession.
+    Each request gets a fresh browser with a random user agent and, if SKROUTZ_PROXIES is set
+    (comma-separated, e.g. http://host:port), a random proxy. Images, CSS and JavaScript are off,
+    so pages load fast and the HTML is what the server sent.
+    Firefox must be installed; Selenium fetches geckodriver itself (or set GECKODRIVER to its path)."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get(self, url):
+        from selenium import webdriver
+        from selenium.webdriver.firefox.options import Options
+        from selenium.webdriver.firefox.service import Service
+
+        options = Options()
+        options.add_argument("--headless")
+        options.set_preference("permissions.default.image", 2)
+        options.set_preference("permissions.default.stylesheet", 2)
+        options.set_preference("javascript.enabled", False)
+        options.set_preference("general.useragent.override", random.choice(USER_AGENTS))
+        proxies = [p.strip() for p in os.environ.get("SKROUTZ_PROXIES", "").split(",") if p.strip()]
+        if proxies:
+            proxy = urlparse(random.choice(proxies))
+            options.set_preference("network.proxy.type", 1)  # manual; Firefox ignores Chrome's --proxy-server
+            for scheme in ("http", "ssl"):
+                options.set_preference(f"network.proxy.{scheme}", proxy.hostname)
+                options.set_preference(f"network.proxy.{scheme}_port", proxy.port or 80)
+        # Selenium sometimes can't find Firefox on Windows (SessionNotCreatedException), so point at it
+        binary = os.environ.get("FIREFOX_BINARY") or r"C:\Program Files\Mozilla Firefox\firefox.exe"
+        if os.path.exists(binary):
+            options.binary_location = binary
+        # ponytail: a new Firefox per request (~2 s) for a fresh identity each time; reuse one driver if speed matters more
+        driver = webdriver.Firefox(service=Service(os.environ.get("GECKODRIVER")), options=options)
+        try:
+            driver.set_page_load_timeout(30)
+            driver.get(url)
+            page = Selector(driver.page_source, url=driver.current_url)
+        finally:
+            driver.quit()
+        page.status = 200  # Selenium can't see HTTP status; a block page simply has no product cards
+        return page
+
+
+def open_session(fetcher=None):
+    """'browser' (default): Selenium + Firefox. 'http': plain HTTP via Scrapling, no browser needed.
+    Pick with the SKROUTZ_FETCHER environment variable or the --fetcher option."""
+    fetcher = fetcher or os.environ.get("SKROUTZ_FETCHER", "browser")
+    if fetcher == "browser":
+        try:
+            import selenium  # noqa: F401
+            return BrowserSession()
+        except ImportError:
+            print("Selenium isn't installed, falling back to plain HTTP (pip install selenium)")
+    return FetcherSession(impersonate="chrome", retries=3)
 
 # Windows consoles can't show every character (e.g. Skroutz's non-breaking hyphen); a progress print must never crash a scrape
 for _stream in (sys.stdout, sys.stderr):
@@ -161,7 +231,7 @@ def with_params(url, **params):
 def parse_card(card):
     href = card.css("a.sku-card-title-link::attr(href)").get() or card.css("a.js-sku-link::attr(href)").get() or ""
     rating_title = card.css("a.rating.stars::attr(title)").get() or ""  # "5,0 αστέρια από 42 χρήστες"
-    rating = re.search(r"(\d+[.,]\d+)", rating_title)
+    rating = re.search(r"(\d+[.,]\d+)", rating_title or card.css("span[data-testid='star-rating-value']::text").get() or "")
     reviews = re.search(r"(\d+)\s*(?:χρήστ|κριτικ|review|member|user)", rating_title)  # Greek or English site
     # The current price is the link; on deals the old price sits in <strike> before it
     price = parse_price(card.css("div[data-testid='normal-price-container'] > a::text").get())
@@ -176,7 +246,7 @@ def parse_card(card):
         "Discount %": round((old - price) / old * 100, 1) if old and price and old > price else 0,
         "Rating": float(rating.group(1).replace(",", ".")) if rating else None,
         "Reviews": int(reviews.group(1)) if reviews else 0,
-        "Specs": card.css("p.specs::text").get(),
+        "Specs": card.css("p.specs::attr(title)").get() or card.css("p.specs::text").get(),  # title holds the untruncated specs
         "Sponsored": "sponsored=" in href,
         "URL": urljoin(BASE, href.split("?")[0]),
     }
@@ -274,6 +344,7 @@ def main():
     ap.add_argument("--top", type=int, help="Keep only the first N after sorting")
     ap.add_argument("--details", action="store_true", help="Also open each product page for brand + full specs")
     ap.add_argument("--delay", type=float, default=2.0, help="Seconds between requests (default 2)")
+    ap.add_argument("--fetcher", choices=["browser", "http"], help="browser = headless Firefox (default), http = no browser")
     ap.add_argument("-o", "--out", default="skroutz.csv", help=".csv or .xlsx")
     args = ap.parse_args()
 
@@ -285,7 +356,7 @@ def main():
 
     rows = []
     try:
-        with FetcherSession(impersonate="chrome", retries=3) as session:
+        with open_session(args.fetcher) as session:
             crawl_listing(session, url, args.pages, args.delay, rows)
             record_and_annotate(rows)
             min_discount = max(args.min_discount, 0.1 if args.only_discounted else 0)

@@ -26,9 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from scrapling.fetchers import FetcherSession
-
-from skroutz_scraper import BASE, crawl_listing, data_dir, fill_photos, open_db, record_and_annotate, thumb
+from skroutz_scraper import BASE, crawl_listing, data_dir, fill_photos, open_db, open_session, record_and_annotate, thumb
 
 PORT = int(os.environ.get("LAPTOP_PICKER_PORT", 8766))
 LAPTOPS_URL = f"{BASE}/c/25/laptop.html"
@@ -325,7 +323,7 @@ def pick(q):
         params["price_max"] = hi
 
     rows = []
-    with FetcherSession(impersonate="chrome", retries=3) as session:
+    with open_session() as session:
         bench = load_benchmarks(session)
         cpus = Bench(bench["cpu"], CPU_NOISE)
         gpus = Bench(bench["gpu"], GPU_NOISE, prefer_laptop=True, need_model=False)  # "Iris Xe" has no number

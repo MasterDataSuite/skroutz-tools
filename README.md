@@ -49,7 +49,9 @@ Run `python skroutz_scraper.py --help` for all options.
 | `laptop_picker.py` | Laptop Picker: PassMark matching and scoring |
 | `app.py` | Starts both pages together |
 
-- Pages are fetched with plain HTTP using [Scrapling](https://github.com/D4Vinci/Scrapling). No browser is needed.
+- Pages are fetched with **headless Firefox** through Selenium. Each request opens a fresh browser with a random user agent, with images, CSS and JavaScript turned off. Firefox must be installed; Selenium downloads geckodriver itself, or you can set `GECKODRIVER` to its path (and `FIREFOX_BINARY` if Firefox isn't in the default place).
+- **Proxies (optional):** set `SKROUTZ_PROXIES` to a comma-separated list such as `http://host1:8080,http://host2:8080`, and each request uses a random one.
+- **No browser?** Set `SKROUTZ_FETCHER=http`, or pass `--fetcher http` on the command line, to fetch with plain HTTP using [Scrapling](https://github.com/D4Vinci/Scrapling). If Selenium isn't installed, the tools fall back to this automatically. Skroutz sometimes blocks plain HTTP with a 403.
 - **Price history:** `skroutz_prices.db` is created next to the scripts. It grows each time you run a tool, so verdicts like "All-time low" and "Fake discount?" need a few days of runs before they mean anything.
 - **Benchmarks:** the PassMark CPU and GPU lists are downloaded once and refreshed every 30 days (`passmark_cache.json`). PassMark has no scores for Apple GPUs, so those, and any other unrecognised GPU, get a conservative estimate that is labelled as such.
 - **Laptop specs:** full spec pages are fetched only for the most promising laptops and remembered, so later runs are faster.
@@ -69,6 +71,6 @@ python -m venv .venv
 .venv\Scripts\pip install "scrapling[fetchers]>=0.5.1" pyinstaller
 .venv\Scripts\python -m PyInstaller --onefile --name SkroutzTools --exclude-module playwright --exclude-module tkinter --collect-data apify_fingerprint_datapoints --collect-data browserforge --collect-data scrapling app.py
 ```
-The result is `dist\SkroutzTools.exe`, about 22 MB. Ports can be changed with the `DEAL_FINDER_PORT` and `LAPTOP_PICKER_PORT` environment variables.
+The result is `dist\SkroutzTools.exe`, about 22 MB. This build leaves Selenium out, so the .exe uses plain HTTP; add `selenium` to the `pip install` line to bundle the Firefox fetcher (Firefox must still be installed on the PC). Ports can be changed with the `DEAL_FINDER_PORT` and `LAPTOP_PICKER_PORT` environment variables.
 
 Scrapers break when sites change their HTML. If results suddenly come back empty, the CSS selectors in `skroutz_scraper.py` probably need updating.

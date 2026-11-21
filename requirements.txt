@@ -1,4 +1,5 @@
 scrapling[fetchers]>=0.5.1
+selenium>=4.11  # headless Firefox fetcher; needs Firefox installed
 # Only needed for saving .xlsx from the command line:
 pandas
 openpyxl
