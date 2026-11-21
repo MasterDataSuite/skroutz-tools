@@ -22,7 +22,7 @@ import time
 from contextlib import closing
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from statistics import mean
+from statistics import mean, median
 from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse, quote_plus
 
 import random
@@ -147,11 +147,17 @@ CHART_ATTR = "data-sku-page--price-history-chart-url-value"  # product page -> i
 
 
 def history_verdict(price, old_price, past):
-    """Compare today's price with the prices recorded on earlier days of the last 3 months (one per day)."""
+    """Compare today's price with the prices recorded on earlier days of the last 3 months (one per day, oldest first)."""
     if not past:
         return {"Verdict": "New", "vs Avg %": None, "3-Month Avg": None, "3-Month Low": None, "Days Tracked": 1}
     avg, low = mean(past), min(past)
-    if price < low:
+    start = median(past[:7])  # the price when the 3 months began
+    if (old_price and old_price > price and len(past) >= 14
+            and low >= start * 0.98         # it only went up: never meaningfully below where it started...
+            and max(past) > start * 1.05    # ...it really was raised...
+            and price >= start * 0.98):     # ...and the "discount" only brings it back to the old price
+        verdict = "Price-hike scam?"  # checked first: the raised months inflate the average, so it would look "Below average"
+    elif price < low:
         verdict = "3-month low"
     elif price < avg * 0.95:
         verdict = "Below average"
@@ -190,7 +196,7 @@ def record_and_annotate(rows, db_path=DB_PATH, today=None):
         db.commit()
         for r in rows:
             since = (date.fromisoformat(today) - timedelta(days=HISTORY_DAYS)).isoformat()
-            past = [p for (p,) in db.execute("SELECT price FROM prices WHERE sku = ? AND day < ? AND day >= ?",
+            past = [p for (p,) in db.execute("SELECT price FROM prices WHERE sku = ? AND day < ? AND day >= ? ORDER BY day",
                                              (r["SKU"], today, since))]
             r.update(history_verdict(r["Price"], r["Old Price"], past))
             if not r.get("Photo"):
@@ -454,6 +460,12 @@ if __name__ == "__main__":
     assert history_verdict(100, 150, [100, 101, 99])["Verdict"] == "Fake discount?"
     assert history_verdict(100, None, [])["Verdict"] == "New"
     assert history_verdict(100, None, [90, 120])["3-Month Avg"] == 105  # average, not median
+    hiked = [100] * 10 + [120] * 20  # raised from 100 to 120, now "30% off" back to 100
+    assert history_verdict(100, 143, hiked)["Verdict"] == "Price-hike scam?"
+    assert history_verdict(85, 120, hiked)["Verdict"] == "3-month low"  # a real cut below the old price is fine
+    assert history_verdict(100, None, hiked)["Verdict"] != "Price-hike scam?"  # no discount shown, no scam
+    assert history_verdict(100, 143, [100] * 10 + [90] * 5 + [120] * 15)["Verdict"] != "Price-hike scam?"  # it also dropped
+    assert history_verdict(80, 100, [100] * 30)["Verdict"] == "3-month low"  # flat price, real discount
     g = {"min_price": {"graphData": {"1_months": {"values": [{"timestamp": 1792616400, "value": 28.35}, {"timestamp": 1792702800, "value": 29}]},
                                      "3_months": {"values": [{"timestamp": 1788210000, "value": 31}, {"timestamp": 1779400000, "value": 99}]}}}}
     assert history_points(g, "2026-11-21") == {"2026-10-22": 28.35, "2026-10-23": 29, "2026-09-01": 31}, history_points(g, "2026-11-21")  # 99 is >90 days old

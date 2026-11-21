@@ -434,7 +434,7 @@ function partCell(name, score, tip) {
   const td = el("td", "part"); td.append(scoreCell(score)); td.append(el("div", "muted", name || "unknown"));
   if (tip) td.title = tip; return td;
 }
-const VERDICT = {"3-month low": "good", "Below average": "good", "Fake discount?": "bad", "Above average": "bad"};
+const VERDICT = {"3-month low": "good", "Below average": "good", "Fake discount?": "bad", "Price-hike scam?": "bad", "Above average": "bad"};
 
 const COLS = [
   {h: "#", sort: null, cell: (r, i) => el("td", "num", i + 1)},

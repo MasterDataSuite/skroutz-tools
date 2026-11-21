@@ -81,7 +81,7 @@ const EURO = new Set(["Price", "Old Price", "3-Month Avg", "3-Month Low"]);
 const fmt = (k, v) => v == null ? "" : EURO.has(k) ? v.toFixed(2).replace(".", ",") + " €"
   : k === "Discount %" ? (v ? "-" + v + "%" : "")
   : k === "vs Avg %" ? (v > 0 ? "+" : "") + v + "%" : String(v);
-const VERDICT = {"3-month low": "good", "Below average": "good", "Fake discount?": "bad", "Above average": "bad"};
+const VERDICT = {"3-month low": "good", "Below average": "good", "Fake discount?": "bad", "Price-hike scam?": "bad", "Above average": "bad"};
 
 $("f").onsubmit = async e => {
   e.preventDefault();
